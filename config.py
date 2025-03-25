@@ -52,7 +52,9 @@ def create_directories():
         RESULTS_DIR,
         RESULTS_DIR / "figures",
         RESULTS_DIR / "emergence",
-        RESULTS_DIR / "spectra"
+        RESULTS_DIR / "spectra",
+        RESULTS_DIR / "nfd",
+        RESULTS_DIR / "nfd/comparisons"
     ]
 
     for directory in dirs:
@@ -71,6 +73,11 @@ def create_directories():
 
         figure_dir = RESULTS_DIR / "figures" / model_name / f"threshold{THRESHOLD}"
         os.makedirs(figure_dir, exist_ok=True)
+        
+        # Create NFD directories
+        nfd_dir = RESULTS_DIR / "nfd" / model_name
+        os.makedirs(nfd_dir, exist_ok=True)
+        os.makedirs(nfd_dir / "figures", exist_ok=True)
 
 
 if __name__ == "__main__":
