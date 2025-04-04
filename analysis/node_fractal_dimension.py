@@ -18,41 +18,40 @@ import pickle
 from pathlib import Path
 
 
-def create_network_from_pkl(pkl_file):
+def create_network_from_npy(npy_file):
     """
-    Create a NetworkX graph from a preprocessed PKL file.
+    Create a NetworkX graph from an original NPY file.
     
     Args:
-        pkl_file: Path to the pickle file containing network data
+        npy_file: Path to the numpy file containing network data
         
     Returns:
         NetworkX Graph object
     """
     print("Loading network data...")
-    with open(pkl_file, 'rb') as f:
-        net_data = pickle.load(f)
+    net_data = np.load(npy_file)
     
     print("Creating network...")
     G = nx.Graph()
     
+    # Get all unique node IDs
+    all_nodes = set()
+    for edge in net_data:
+        all_nodes.add(int(edge[0]))
+        all_nodes.add(int(edge[1]))
+    
     # Add nodes
-    node_ids = set()
+    G.add_nodes_from(all_nodes)
     
-    for idx, weights in enumerate(net_data):
-        node_ids.add(idx)
-        
-    G.add_nodes_from(node_ids)
+    # Add edges with weights (using inverse of absolute weight value)
+    for edge in net_data:
+        source = int(edge[0])
+        target = int(edge[1])
+        # Use inverse of absolute weight value as the distance metric
+        weight = 1.0 / np.abs(float(edge[2]))
+        G.add_edge(source, target, weight=weight)
     
-    # Add edges with weights
-    for i, weights_list in enumerate(net_data):
-        if not weights_list:
-            continue
-            
-        for j, weight in enumerate(weights_list):
-            # Use inverse of weight for better NFD calculation
-            # We already have inverse weights stored from preprocess_networks function
-            G.add_edge(i, j, weight=weight)
-    
+    print(f"Network created with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
     return G
 
 
@@ -116,10 +115,14 @@ def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_
     Returns:
         DataFrame containing node IDs and their NFD values
     """
-    # Setup paths
-    network_dir = Path(f'./data/networks/sample_{sample_num}')
-    pkl_file = network_dir / model_name / f"{model_name}_step{step}_sampled_{sample_idx}.pkl"
+    # Setup paths - Now using the original NPY file
+    model_dir = Path(f'./data/models/sample_{sample_num}')
+    npy_file = model_dir / model_name / f"{model_name}_step{step}_sampled_{sample_idx}.npy"
     
+    if not npy_file.exists():
+        print(f"Error: NPY file not found at {npy_file}")
+        return None
+        
     if output_dir is None:
         output_dir = Path(f'./results/nfd/{model_name}')
     
@@ -128,10 +131,8 @@ def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_
     
     print(f"Processing network: {model_name}, step {step}, sample {sample_idx}")
     
-    # Create network
-    G = create_network_from_pkl(pkl_file)
-    
-    print(f"Network has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+    # Create network from NPY file
+    G = create_network_from_npy(npy_file)
     
     # Calculate NFD values
     print("Calculating NFD values...")
@@ -162,21 +163,20 @@ def process_all_networks(model_name, sample_num=5, output_dir=None):
     Returns:
         None
     """
-    # Setup paths
-    network_dir = Path(f'./data/networks/sample_{sample_num}')
-    model_dir = network_dir / model_name
+    # Setup paths - Using model_dir for NPY files
+    model_dir = Path(f'./data/models/sample_{sample_num}') / model_name
     
     if not model_dir.exists():
         print(f"Error: Directory for model {model_name} not found at {model_dir}")
         return
     
     # Get all network files
-    pkl_files = list(model_dir.glob(f"{model_name}_step*_sampled_*.pkl"))
-    print(f"Found {len(pkl_files)} networks to process for {model_name}")
+    npy_files = list(model_dir.glob(f"{model_name}_step*_sampled_*.npy"))
+    print(f"Found {len(npy_files)} networks to process for {model_name}")
     
     # Get unique steps and sample indices
     steps = set()
-    for file in pkl_files:
+    for file in npy_files:
         step_match = re.search(r"step(\d+)_sampled", file.name)
         if step_match:
             steps.add(int(step_match.group(1)))
@@ -191,12 +191,12 @@ def process_all_networks(model_name, sample_num=5, output_dir=None):
     
     for step in steps:
         for sample_idx in range(sample_num):
-            pkl_file = model_dir / f"{model_name}_step{step}_sampled_{sample_idx}.pkl"
-            if pkl_file.exists():
+            npy_file = model_dir / f"{model_name}_step{step}_sampled_{sample_idx}.npy"
+            if npy_file.exists():
                 try:
                     calculate_and_save_nfd(model_name, step, sample_idx, sample_num, output_dir)
                 except Exception as e:
-                    print(f"Error processing {pkl_file}: {str(e)}")
+                    print(f"Error processing {npy_file}: {str(e)}")
 
 
 def analyze_nfd_evolution(model_name, sample_idx=0, sample_num=5):
