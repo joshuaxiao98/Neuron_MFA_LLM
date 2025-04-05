@@ -1,16 +1,14 @@
 """
 Node Fractal Dimension (NFD) analysis for neuron interaction networks.
 
-This module provides functions to calculate the Node Fractal Dimension for each node
-in a network derived from LLM weights, offering insights into the local structural 
-complexity around individual neurons.
+This module provides simplified functions to calculate the Node Fractal Dimension for each node
+in a network derived from LLM weights.
 """
 
 import os
 import re
 import numpy as np
 import pandas as pd
-import networkx as nx
 from scipy import stats
 from collections import Counter
 from tqdm import tqdm
@@ -18,90 +16,56 @@ import pickle
 from pathlib import Path
 
 
-def create_network_from_npy(npy_file):
-    """
-    Create a NetworkX graph from an original NPY file.
-    
-    Args:
-        npy_file: Path to the numpy file containing network data
-        
-    Returns:
-        NetworkX Graph object
-    """
-    print("Loading network data...")
-    net_data = np.load(npy_file)
-    
-    print("Creating network...")
-    G = nx.Graph()
-    
-    # Get all unique node IDs
-    all_nodes = set()
-    for edge in net_data:
-        all_nodes.add(int(edge[0]))
-        all_nodes.add(int(edge[1]))
-    
-    # Add nodes
-    G.add_nodes_from(all_nodes)
-    
-    # Add edges with weights (using inverse of absolute weight value)
-    for edge in net_data:
-        source = int(edge[0])
-        target = int(edge[1])
-        # Use inverse of absolute weight value as the distance metric
-        weight = 1.0 / np.abs(float(edge[2]))
-        G.add_edge(source, target, weight=weight)
-    
-    print(f"Network created with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-    return G
-
-
-def node_dimension(G, weight=True, fdigi=6):
+def node_dimension(mat, fdigi=0, threshold=200):
     """
     Calculate the Node Fractal Dimension (NFD) for each node in the network.
     
     Args:
-        G: NetworkX graph
-        weight: Whether to use edge weights (default: True)
-        fdigi: Number of digits for rounding (default: 6)
+        mat: List of lists, each containing the weights for a node
+        fdigi: Number of digits for rounding (default: 0)
+        threshold: Maximum weight threshold (default: 200)
         
     Returns:
-        Dictionary mapping node IDs to their NFD values
+        List of NFD values for each node
     """
-    node_dimension = {}
+    wnfd = []
     
-    for node in tqdm(G.nodes(), desc="Calculating node dimensions"):
-        # Calculate shortest paths from this node to all others
-        distances = nx.single_source_dijkstra_path_length(G, node, weight='weight' if weight else None)
-        
-        # Process distances
-        grow = sorted(list(distances.values()))
-        grow = [round(d, fdigi) for d in grow]
-        grow = grow[1:]  # Remove self-distance (0)
+    for i in range(len(mat)):
+        # Filter weights within threshold
+        grow = [m for m in mat[i] if 0 < m <= threshold]
         
         r_g = []
         num_g = []
-        num_nodes = 0
         
-        # Count nodes at each distance
-        for i, count in Counter(grow).items():
-            num_nodes += count
-            if i > 0:  # Avoid log(0)
-                r_g.append(i)
-                num_g.append(num_nodes)
-        
-        # Calculate NFD (slope of log-log plot)
-        if len(r_g) > 1:
-            x = np.log(r_g)
-            y = np.log(num_g)
-            slope, _, _, _, _ = stats.linregress(x, y)
-            node_dimension[node] = slope
-        else:
-            node_dimension[node] = 0
+        if len(grow) > 10:
+            num_nodes = 1
+            grow.sort()
+            # Round weights to specified precision
+            grow = [round(d, fdigi) for d in grow]
+            num = Counter(grow)
             
-    return node_dimension
+            # Calculate node-based scaling
+            for i, j in num.items():
+                num_nodes += j
+                if i > 0:  # Avoid log(0)
+                    r_g.append(i)
+                    num_g.append(num_nodes)
+            
+            # Calculate slope using log-log regression
+            if len(r_g) > 1:
+                x = np.log(r_g)
+                y = np.log(num_g)
+                slope, _, _, _, _ = stats.linregress(x, y)
+                wnfd.append(slope)
+            else:
+                wnfd.append(0)
+        else:
+            wnfd.append(0)
+    
+    return wnfd  # List storing the values of node dimension of all the nodes
 
 
-def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_dir=None):
+def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_dir=None, fdigi=0, threshold=200):
     """
     Calculate and save NFD values for a specific model network.
     
@@ -111,18 +75,21 @@ def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_
         sample_idx: Sample index (default: 0)
         sample_num: Sample number (default: 5)
         output_dir: Output directory (default: None, will use './results/nfd/{model_name}')
+        fdigi: Number of digits for rounding (default: 0)
+        threshold: Maximum weight threshold (default: 200)
         
     Returns:
         DataFrame containing node IDs and their NFD values
     """
-    # Setup paths - Now using the original NPY file
-    model_dir = Path(f'./data/models/sample_{sample_num}')
-    npy_file = model_dir / model_name / f"{model_name}_step{step}_sampled_{sample_idx}.npy"
+    # Setup paths for pkl file
+    network_dir = Path(f'./data/networks/sample_{sample_num}')
+    pkl_file = network_dir / model_name / f"{model_name}_step{step}_sampled_{sample_idx}.pkl"
     
-    if not npy_file.exists():
-        print(f"Error: NPY file not found at {npy_file}")
+    if not pkl_file.exists():
+        print(f"Error: PKL file not found at {pkl_file}")
         return None
-        
+    
+    # Setup output directory
     if output_dir is None:
         output_dir = Path(f'./results/nfd/{model_name}')
     
@@ -131,17 +98,21 @@ def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_
     
     print(f"Processing network: {model_name}, step {step}, sample {sample_idx}")
     
-    # Create network from NPY file
-    G = create_network_from_npy(npy_file)
+    # Load the pkl file
+    print("Loading network data...")
+    with open(pkl_file, 'rb') as f:
+        net_data = pickle.load(f)
+    
+    print(f"Network has {len(net_data)} nodes")
     
     # Calculate NFD values
     print("Calculating NFD values...")
-    nfd_dict = node_dimension(G)
+    nfd_values = node_dimension(net_data, fdigi=fdigi, threshold=threshold)
     
     # Create DataFrame
     nfd_df = pd.DataFrame({
-        'node_id': list(nfd_dict.keys()),
-        'nfd_value': list(nfd_dict.values())
+        'node_id': list(range(len(nfd_values))),
+        'nfd_value': nfd_values
     })
     
     # Save results
@@ -151,7 +122,7 @@ def calculate_and_save_nfd(model_name, step, sample_idx=0, sample_num=5, output_
     return nfd_df
 
 
-def process_all_networks(model_name, sample_num=5, output_dir=None):
+def process_all_networks(model_name, sample_num=5, output_dir=None, fdigi=0, threshold=200):
     """
     Process all networks for a specific model across all training steps.
     
@@ -159,24 +130,27 @@ def process_all_networks(model_name, sample_num=5, output_dir=None):
         model_name: Name of the model
         sample_num: Sample number (default: 5)
         output_dir: Output directory (default: None)
+        fdigi: Number of digits for rounding (default: 0)
+        threshold: Maximum weight threshold (default: 200)
         
     Returns:
         None
     """
-    # Setup paths - Using model_dir for NPY files
-    model_dir = Path(f'./data/models/sample_{sample_num}') / model_name
+    # Setup paths
+    network_dir = Path(f'./data/networks/sample_{sample_num}')
+    model_dir = network_dir / model_name
     
     if not model_dir.exists():
         print(f"Error: Directory for model {model_name} not found at {model_dir}")
         return
     
     # Get all network files
-    npy_files = list(model_dir.glob(f"{model_name}_step*_sampled_*.npy"))
-    print(f"Found {len(npy_files)} networks to process for {model_name}")
+    pkl_files = list(model_dir.glob(f"{model_name}_step*_sampled_*.pkl"))
+    print(f"Found {len(pkl_files)} networks to process for {model_name}")
     
     # Get unique steps and sample indices
     steps = set()
-    for file in npy_files:
+    for file in pkl_files:
         step_match = re.search(r"step(\d+)_sampled", file.name)
         if step_match:
             steps.add(int(step_match.group(1)))
@@ -191,12 +165,12 @@ def process_all_networks(model_name, sample_num=5, output_dir=None):
     
     for step in steps:
         for sample_idx in range(sample_num):
-            npy_file = model_dir / f"{model_name}_step{step}_sampled_{sample_idx}.npy"
-            if npy_file.exists():
+            pkl_file = model_dir / f"{model_name}_step{step}_sampled_{sample_idx}.pkl"
+            if pkl_file.exists():
                 try:
-                    calculate_and_save_nfd(model_name, step, sample_idx, sample_num, output_dir)
+                    calculate_and_save_nfd(model_name, step, sample_idx, sample_num, output_dir, fdigi, threshold)
                 except Exception as e:
-                    print(f"Error processing {npy_file}: {str(e)}")
+                    print(f"Error processing {pkl_file}: {str(e)}")
 
 
 def analyze_nfd_evolution(model_name, sample_idx=0, sample_num=5):
@@ -394,13 +368,13 @@ if __name__ == "__main__":
     sample_idx = 0
     
     # Calculate NFD for a specific network
-    calculate_and_save_nfd(model_name, step, sample_idx)
+    calculate_and_save_nfd(model_name, step, sample_idx, fdigi=0, threshold=200)
     
     # Visualize the NFD distribution
     visualize_nfd_distribution(model_name, step, sample_idx)
     
     # Process all networks for a model
-    # process_all_networks(model_name)
+    # process_all_networks(model_name, fdigi=0, threshold=200)
     
     # Analyze NFD evolution throughout training
     # analyze_nfd_evolution(model_name)
